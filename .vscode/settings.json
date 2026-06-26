@@ -1,0 +1,4 @@
+{
+    "dimmer.enabled": false,
+    "idf.currentSetup": "/home/josh/.espressif/v6.0.1/esp-idf"
+}
