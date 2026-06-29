@@ -149,6 +149,7 @@ void Controller::handleCameraInit()
 
     m_stream.initialize(&m_camera, STREAM_PORT);
     m_stream.start();
+    m_screen.showStatus("Streaming", m_ip);
     m_stateMachine.setState(ControllerState::RUN);
 }
 
@@ -163,8 +164,11 @@ void Controller::handleRun()
     }
 
     m_lastRefresh = millis();
-    m_screen.showStatus("Streaming", m_ip);
 
+    // The GC9A01 runs on SPI with a GDMA channel, the same DMA block the camera
+    // uses. Redrawing it while the camera DMA is free-running can corrupt the
+    // camera descriptors, so during streaming we only log stats and leave the
+    // panel alone.
     uint32_t cam_frames = 0;
     size_t   cam_last_len = 0;
 

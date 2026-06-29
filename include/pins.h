@@ -16,15 +16,23 @@
 #define PIN_CAM_VSYNC    11
 #define PIN_CAM_HREF     12
 
-// HM01B0 4-bit data bus wired to camera D0-D3. The S3 LCD_CAM peripheral has no
-// native 4-bit capture mode, so it runs as 8-bit and the upper four data inputs
-// (D4-D7) are routed to constant low via GPIO_NUM_NC in startCapture, costing no
-// physical pins. These are on the board back-side pads. Avoid strapping pin 45
-// and the USB pair (19, 20). Wire breakout D0 to PIN_CAM_D0 (the bus LSB), D1 to
-// PIN_CAM_D1, and so on, so the captured byte bit order matches the reassembly.
+// HM01B0 runs as an 8-bit DVP sensor on the esp32-camera path, so all of D0-D7
+// are wired. D0 is the bus LSB. XCLK is now driven by the ESP (LEDC), so the
+// breakout must be switched to accept an external clock (lift the onboard clock
+// resistor) rather than self-oscillating.
+//
+// CONFIRM each of these against the S3-Zero pinout before wiring. Hard
+// constraints: avoid 14 (link RX, above), 0/3/45/46 (strapping), 19/20 (USB),
+// and 26-32 (flash/PSRAM). D2/D3 already sit on the back pads (38/39); D4-D7 and
+// XCLK below are their neighbours, but verify they are actually broken out.
 #define PIN_CAM_D0       17
 #define PIN_CAM_D1       18
 #define PIN_CAM_D2       38
 #define PIN_CAM_D3       39
+#define PIN_CAM_D4       15
+#define PIN_CAM_D5       16
+#define PIN_CAM_D6       40
+#define PIN_CAM_D7       41
+#define PIN_CAM_XCLK     42
 
 #define PIN_STATUS_LED   21

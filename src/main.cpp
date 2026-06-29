@@ -1,10 +1,10 @@
 #include <Arduino.h>
 #include "controller.h"
 
-// The MJPEG encode (fmt2jpg) runs in the Arduino loop task and is stack heavy,
-// especially on busy frames. The default 8 KB loop stack can overflow into
-// adjacent heap, which then shows up as a fault in an unrelated ISR. Give it
-// room.
+// With LWIP core locking, a client.write() runs the whole TCP/IP and WiFi
+// transmit path inline on the loop task, which is a deep call chain. Together
+// with the JPEG encode in the same loop, the default 8 KB loop stack is tight,
+// so give it headroom.
 SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 
 void setup()
