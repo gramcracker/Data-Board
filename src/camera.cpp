@@ -54,14 +54,25 @@ bool Camera::initialize()
         return false;
     }
 
+    m_ready = false;
+
+    sensor_t *p_sensor = my_esp_camera_sensor_get();
+
+    if (p_sensor == nullptr)
+    {
+        gLogger.error("Camera sensor handle NULL");
+        return false;
+    }
+
+    // The breakout only wires D0-D3, so force 4-bit serial output regardless of
+    // what the sensor's default table set. In 4-bit mode each 8-bit pixel is
+    // sent as two low-nibble bytes, which captureFrame reassembles.
+    p_sensor->set_reg(p_sensor, 0x3059, 0xFF, 0x42);
+    p_sensor->set_reg(p_sensor, 0x0104, 0xFF, 0x01);
+
     if (CAM_START_WITH_TEST_PATTERN == 1)
     {
-        sensor_t *p_sensor = my_esp_camera_sensor_get();
-
-        if (p_sensor != nullptr && p_sensor->set_colorbar != nullptr)
-        {
-            p_sensor->set_colorbar(p_sensor, 1);
-        }
+        p_sensor->set_colorbar(p_sensor, 1);
     }
 
     m_ready = true;
@@ -77,6 +88,12 @@ bool Camera::captureFrame(uint8_t *p_buffer, size_t buffer_len, size_t &out_len)
         return false;
     }
 
+    if (buffer_len < CAM_FRAME_BYTES)
+    {
+        gLogger.error("Camera dest buffer too small buf:%u need:%u", (unsigned)buffer_len, (unsigned)CAM_FRAME_BYTES);
+        return false;
+    }
+
     camera_fb_t *p_fb = my_esp_camera_fb_get();
 
     if (p_fb == nullptr)
@@ -85,15 +102,41 @@ bool Camera::captureFrame(uint8_t *p_buffer, size_t buffer_len, size_t &out_len)
         return false;
     }
 
-    if (p_fb->len > buffer_len)
+    size_t need = (size_t)CAM_RAW_LINE_BYTES * (size_t)CAM_RAW_LINES;
+
+    if (p_fb->len < need)
     {
-        gLogger.error("Camera frame too big len:%u buf:%u", (unsigned)p_fb->len, (unsigned)buffer_len);
+        gLogger.error("Camera frame short len:%u need:%u", (unsigned)p_fb->len, (unsigned)need);
         my_esp_camera_fb_return(p_fb);
         return false;
     }
 
-    memcpy(p_buffer, p_fb->buf, p_fb->len);
-    out_len = p_fb->len;
+    // Each pixel arrives as two consecutive bytes carrying its low and high
+    // nibbles on D0-D3. Mask off the unwired upper lines, recombine, and crop
+    // the dummy border down to CAM_WIDTH x CAM_HEIGHT.
+    for (int y = 0; y < CAM_HEIGHT; y++)
+    {
+        const uint8_t *p_raw = p_fb->buf + ((size_t)(y + CAM_CROP_Y) * (size_t)CAM_RAW_LINE_BYTES);
+        uint8_t       *p_dst = p_buffer + ((size_t)y * (size_t)CAM_WIDTH);
+
+        for (int x = 0; x < CAM_WIDTH; x++)
+        {
+            int idx = (CAM_CROP_X + x) * 2;
+            int first = p_raw[idx] & 0x0F;
+            int second = p_raw[idx + 1] & 0x0F;
+
+            if (CAM_NIBBLE_LSB_FIRST == 1)
+            {
+                p_dst[x] = (uint8_t)((second << 4) | first);
+            }
+            else
+            {
+                p_dst[x] = (uint8_t)((first << 4) | second);
+            }
+        }
+    }
+
+    out_len = (size_t)(CAM_WIDTH * CAM_HEIGHT);
 
     m_lastLen = p_fb->len;
     m_frameCount = m_frameCount + 1;

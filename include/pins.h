@@ -8,7 +8,7 @@
 #define PIN_TFT_BL       6
 
 #define PIN_LINK_TX      7
-#define PIN_LINK_RX      14
+#define PIN_LINK_RX      13
 
 #define PIN_CAM_SDA      8
 #define PIN_CAM_SCL      9
