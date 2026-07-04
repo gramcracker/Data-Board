@@ -12,6 +12,9 @@ enum class LinkCommand : uint8_t
     GET_RESULTS = 0x02,
     RUN_TEST    = 0x03,
     START_RUN   = 0x10,
+    DRIVE       = 0x11,
+    SET_IR      = 0x12,
+    REBOOT      = 0x7E,
     ESTOP       = 0x7F
 };
 
@@ -21,6 +24,7 @@ enum class LinkResponse : uint8_t
     RESULTS   = 0x82,
     TEST_DONE = 0x83,
     BOOTED    = 0x84,
+    TELEMETRY = 0x85,
     ACK       = 0x8E,
     NACK      = 0x8F
 };
