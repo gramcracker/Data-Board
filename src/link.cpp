@@ -34,6 +34,23 @@ bool Link::sendCommand(LinkCommand command, const uint8_t *p_payload, uint8_t le
     return true;
 }
 
+bool Link::command(LinkCommand command, const uint8_t *p_payload, uint8_t length,
+                   LinkResponse &out_type, uint8_t *p_out_payload, uint8_t &out_length,
+                   uint32_t timeout_ms)
+{
+    if (sendCommand(command, p_payload, length) == false)
+    {
+        return false;
+    }
+
+    if (readResponse(out_type, p_out_payload, out_length, timeout_ms) == false)
+    {
+        return false;
+    }
+
+    return true;
+}
+
 bool Link::readResponse(LinkResponse &out_type, uint8_t *p_payload, uint8_t &out_length, uint32_t timeout_ms)
 {
     uint32_t start = millis();

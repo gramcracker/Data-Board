@@ -121,7 +121,7 @@ const char *componentName(ComponentId component)
         case ComponentId::IR_PAIR:     return "IrPair";
         case ComponentId::CLIFF:       return "Cliff";
         case ComponentId::UART_LINK:   return "UartLink";
-        case ComponentId::DISPLAY:     return "Display";
+        case ComponentId::SCREEN:      return "Screen";
         case ComponentId::CAMERA:      return "Camera";
         case ComponentId::FLASH_MEM:   return "Flash";
         default:                       return "None";

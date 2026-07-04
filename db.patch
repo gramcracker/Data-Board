@@ -1,0 +1,422 @@
+diff --git a/include/link.h b/include/link.h
+index a429a91..a251644 100644
+--- a/include/link.h
++++ b/include/link.h
+@@ -10,6 +10,9 @@ public:
+     bool ping(uint32_t timeout_ms);
+     bool poll();
+     bool sendCommand(LinkCommand command, const uint8_t *p_payload, uint8_t length);
++    bool command(LinkCommand command, const uint8_t *p_payload, uint8_t length,
++                 LinkResponse &out_type, uint8_t *p_out_payload, uint8_t &out_length,
++                 uint32_t timeout_ms);
+ 
+ private:
+     bool readResponse(LinkResponse &out_type, uint8_t *p_payload, uint8_t &out_length, uint32_t timeout_ms);
+diff --git a/include/link_protocol.h b/include/link_protocol.h
+index d40e0af..cf6dc7d 100644
+--- a/include/link_protocol.h
++++ b/include/link_protocol.h
+@@ -12,6 +12,9 @@ enum class LinkCommand : uint8_t
+     GET_RESULTS = 0x02,
+     RUN_TEST    = 0x03,
+     START_RUN   = 0x10,
++    DRIVE       = 0x11,
++    SET_IR      = 0x12,
++    REBOOT      = 0x7E,
+     ESTOP       = 0x7F
+ };
+ 
+@@ -21,6 +24,7 @@ enum class LinkResponse : uint8_t
+     RESULTS   = 0x82,
+     TEST_DONE = 0x83,
+     BOOTED    = 0x84,
++    TELEMETRY = 0x85,
+     ACK       = 0x8E,
+     NACK      = 0x8F
+ };
+diff --git a/include/stream_server.h b/include/stream_server.h
+index 3d11b02..dfb0add 100644
+--- a/include/stream_server.h
++++ b/include/stream_server.h
+@@ -1,13 +1,16 @@
+ #pragma once
+ 
++#include "link_protocol.h"
++#include <Arduino.h>
+ #include <cstdint>
+ 
+ class Camera;
++class Link;
+ 
+ class StreamServer
+ {
+ public:
+-    bool initialize(Camera *p_camera, uint16_t port);
++    bool initialize(Camera *p_camera, Link *p_link, uint16_t port);
+     bool start();
+     bool handleClients();
+ 
+@@ -15,6 +18,12 @@ private:
+     bool sendIndexPage(void *p_client);
+     bool sendStream(void *p_client);
+ 
++    bool handlePing(void *p_client);
++    bool handleStatus(void *p_client);
++    bool handleDrive(void *p_client, const String &request_line);
++    bool handleSimpleCommand(void *p_client, LinkCommand command);
++
+     Camera  *m_pCamera = nullptr;
++    Link    *m_pLink = nullptr;
+     uint16_t m_port = 80;
+ };
+diff --git a/src/controller.cpp b/src/controller.cpp
+index 44e8e23..0448e84 100644
+--- a/src/controller.cpp
++++ b/src/controller.cpp
+@@ -147,7 +147,7 @@ void Controller::handleCameraInit()
+         m_screen.showStatus("Camera", "ready");
+     }
+ 
+-    m_stream.initialize(&m_camera, STREAM_PORT);
++    m_stream.initialize(&m_camera, &m_link, STREAM_PORT);
+     m_stream.start();
+     m_screen.showStatus("Streaming", m_ip);
+     m_stateMachine.setState(ControllerState::RUN);
+diff --git a/src/link.cpp b/src/link.cpp
+index 8c8b647..bfb784e 100644
+--- a/src/link.cpp
++++ b/src/link.cpp
+@@ -34,6 +34,23 @@ bool Link::sendCommand(LinkCommand command, const uint8_t *p_payload, uint8_t le
+     return true;
+ }
+ 
++bool Link::command(LinkCommand command, const uint8_t *p_payload, uint8_t length,
++                   LinkResponse &out_type, uint8_t *p_out_payload, uint8_t &out_length,
++                   uint32_t timeout_ms)
++{
++    if (sendCommand(command, p_payload, length) == false)
++    {
++        return false;
++    }
++
++    if (readResponse(out_type, p_out_payload, out_length, timeout_ms) == false)
++    {
++        return false;
++    }
++
++    return true;
++}
++
+ bool Link::readResponse(LinkResponse &out_type, uint8_t *p_payload, uint8_t &out_length, uint32_t timeout_ms)
+ {
+     uint32_t start = millis();
+diff --git a/src/stream_server.cpp b/src/stream_server.cpp
+index 83536b9..92ac71a 100644
+--- a/src/stream_server.cpp
++++ b/src/stream_server.cpp
+@@ -1,14 +1,110 @@
+ #include "stream_server.h"
+ #include "camera.h"
+ #include "camera_globals.h"
++#include "link.h"
++#include "status_codes.h"
+ #include "logger.h"
+ #include <Arduino.h>
+ #include <WiFi.h>
++#include <cstring>
+ 
+ static WiFiServer gWifiServer(80);
+ static uint8_t    gFrameBuffer[CAM_FRAME_BYTES];
+ 
+-bool StreamServer::initialize(Camera *p_camera, uint16_t port)
++static const char INDEX_HTML[] = R"HTML(<!doctype html>
++<html>
++<head>
++<meta name="viewport" content="width=device-width,initial-scale=1">
++<title>Mo-chan test panel</title>
++<style>
++body{margin:0;background:#111;color:#eee;font-family:sans-serif;text-align:center}
++button{margin:4px;padding:12px 16px;font-size:16px;border:0;border-radius:6px;background:#2a2a2a;color:#eee}
++button:active{background:#0a84ff}
++.pad button{width:70px}
++#log{white-space:pre-wrap;text-align:left;margin:8px;padding:8px;background:#000;border-radius:6px;height:120px;overflow:auto;font-family:monospace;font-size:12px}
++img{max-width:100%;height:auto;background:#000}
++.row{margin:6px}
++.estop{background:#b00020}
++</style>
++</head>
++<body>
++<div class="row">
++<button onclick="cmd('/cmd/ping')">Ping</button>
++<button onclick="cmd('/cmd/status')">Status</button>
++<button onclick="cmd('/cmd/start')">Start Run</button>
++<button onclick="cmd('/cmd/reboot')">Reboot STM</button>
++<button class="estop" onclick="cmd('/cmd/estop')">E-STOP</button>
++</div>
++<div class="row pad">
++<button onpointerdown="drive(200,0)" onpointerup="stop()" onpointerleave="stop()">Fwd</button><br>
++<button onpointerdown="drive(0,200)" onpointerup="stop()" onpointerleave="stop()">Left</button>
++<button onclick="stop()">Stop</button>
++<button onpointerdown="drive(0,-200)" onpointerup="stop()" onpointerleave="stop()">Right</button><br>
++<button onpointerdown="drive(-200,0)" onpointerup="stop()" onpointerleave="stop()">Back</button>
++</div>
++<div class="row">
++<button onclick="toggleStream()">Start/Stop Stream</button>
++</div>
++<img id="cam" src="">
++<div id="log"></div>
++<script>
++var streaming=false;
++function log(t){var l=document.getElementById('log');l.textContent=(new Date().toLocaleTimeString()+"  "+t+"\n")+l.textContent;}
++function cmd(p){fetch(p).then(function(r){return r.text();}).then(function(t){log(p+"  ->  "+t);}).catch(function(e){log(p+"  ERR "+e);});}
++function drive(v,w){fetch('/cmd/drive?v='+v+'&w='+w).then(function(r){return r.text();}).then(function(t){log('drive '+v+','+w+"  ->  "+t);});}
++function stop(){drive(0,0);}
++function toggleStream(){var c=document.getElementById('cam');if(streaming==false){c.src='/stream';streaming=true;log('stream on (controls block until stopped)');}else{c.src='';streaming=false;log('stream off');}}
++</script>
++</body>
++</html>)HTML";
++
++static bool sendJson(WiFiClient *p_wifi, const char *p_body)
++{
++    p_wifi->print("HTTP/1.1 200 OK\r\n");
++    p_wifi->print("Content-Type: application/json\r\n");
++    p_wifi->print("Connection: close\r\n\r\n");
++    p_wifi->print(p_body);
++
++    return true;
++}
++
++static long queryInt(const String &line, const char *p_key, long fallback)
++{
++    int idx = line.indexOf(p_key);
++
++    if (idx < 0)
++    {
++        return fallback;
++    }
++
++    int start = idx + int(strlen(p_key));
++    int end   = start;
++
++    while (end < int(line.length()))
++    {
++        char c = line.charAt(end);
++
++        if (((c >= '0') && (c <= '9')) || (c == '-'))
++        {
++            end++;
++        }
++        else
++        {
++            break;
++        }
++    }
++
++    if (end == start)
++    {
++        return fallback;
++    }
++
++    String num = line.substring(start, end);
++
++    return num.toInt();
++}
++
++bool StreamServer::initialize(Camera *p_camera, Link *p_link, uint16_t port)
+ {
+     if (p_camera == nullptr)
+     {
+@@ -16,7 +112,8 @@ bool StreamServer::initialize(Camera *p_camera, uint16_t port)
+     }
+ 
+     m_pCamera = p_camera;
+-    m_port = port;
++    m_pLink   = p_link;
++    m_port    = port;
+ 
+     return true;
+ }
+@@ -37,11 +134,140 @@ bool StreamServer::sendIndexPage(void *p_client)
+ 
+     p_wifi->print("HTTP/1.1 200 OK\r\n");
+     p_wifi->print("Content-Type: text/html\r\n");
+-    p_wifi->print("Connection: close\r\n");
+-    p_wifi->print("\r\n");
+-    p_wifi->print("<html><body style='margin:0;background:#000;text-align:center'>");
+-    p_wifi->print("<img src='/stream' style='max-width:100%;height:auto'>");
+-    p_wifi->print("</body></html>");
++    p_wifi->print("Connection: close\r\n\r\n");
++    p_wifi->print(INDEX_HTML);
++
++    return true;
++}
++
++bool StreamServer::handlePing(void *p_client)
++{
++    WiFiClient *p_wifi = (WiFiClient *)p_client;
++    bool        ok     = false;
++
++    if (m_pLink != nullptr)
++    {
++        ok = m_pLink->ping(LINK_PING_TIMEOUT_MS);
++    }
++
++    if (ok == true)
++    {
++        sendJson(p_wifi, "{\"ok\":true,\"msg\":\"pong\"}");
++    }
++    else
++    {
++        sendJson(p_wifi, "{\"ok\":false,\"msg\":\"timeout\"}");
++    }
++
++    return true;
++}
++
++bool StreamServer::handleStatus(void *p_client)
++{
++    WiFiClient  *p_wifi  = (WiFiClient *)p_client;
++    LinkResponse type    = LinkResponse::NACK;
++    uint8_t      payload[LINK_MAX_PAYLOAD] = {0};
++    uint8_t      length  = 0;
++    bool         ok      = false;
++
++    if (m_pLink != nullptr)
++    {
++        ok = m_pLink->command(LinkCommand::GET_RESULTS, nullptr, 0, type, payload, length, 500);
++    }
++
++    if ((ok == false) || (type != LinkResponse::RESULTS))
++    {
++        sendJson(p_wifi, "{\"ok\":false,\"results\":[]}");
++        return true;
++    }
++
++    p_wifi->print("HTTP/1.1 200 OK\r\n");
++    p_wifi->print("Content-Type: application/json\r\n");
++    p_wifi->print("Connection: close\r\n\r\n");
++    p_wifi->print("{\"ok\":true,\"results\":[");
++
++    uint8_t count = uint8_t(length / 2);
++    uint8_t i     = 0;
++
++    for (i = 0; i < count; i++)
++    {
++        uint16_t raw = uint16_t(payload[i * 2]) | (uint16_t(payload[(i * 2) + 1]) << 8);
++
++        StatusCode status;
++        status.setRaw(raw);
++
++        char text[48] = {0};
++        statusToString(status, text, sizeof(text));
++
++        if (i > 0)
++        {
++            p_wifi->print(",");
++        }
++
++        p_wifi->print("{\"ok\":");
++
++        if (status.isOk() == true)
++        {
++            p_wifi->print("true");
++        }
++        else
++        {
++            p_wifi->print("false");
++        }
++
++        p_wifi->print(",\"text\":\"");
++        p_wifi->print(text);
++        p_wifi->print("\"}");
++    }
++
++    p_wifi->print("]}");
++
++    return true;
++}
++
++bool StreamServer::handleDrive(void *p_client, const String &request_line)
++{
++    WiFiClient *p_wifi = (WiFiClient *)p_client;
++    int16_t     v      = int16_t(queryInt(request_line, "v=", 0));
++    int16_t     w      = int16_t(queryInt(request_line, "w=", 0));
++    uint8_t     payload[4] = {0};
++
++    payload[0] = uint8_t(v & 0xFF);
++    payload[1] = uint8_t((v >> 8) & 0xFF);
++    payload[2] = uint8_t(w & 0xFF);
++    payload[3] = uint8_t((w >> 8) & 0xFF);
++
++    if (m_pLink != nullptr)
++    {
++        m_pLink->sendCommand(LinkCommand::DRIVE, payload, 4);
++    }
++
++    sendJson(p_wifi, "{\"ok\":true,\"msg\":\"drive sent\"}");
++
++    return true;
++}
++
++bool StreamServer::handleSimpleCommand(void *p_client, LinkCommand command)
++{
++    WiFiClient  *p_wifi  = (WiFiClient *)p_client;
++    LinkResponse type    = LinkResponse::NACK;
++    uint8_t      payload[LINK_MAX_PAYLOAD] = {0};
++    uint8_t      length  = 0;
++    bool         ok      = false;
++
++    if (m_pLink != nullptr)
++    {
++        ok = m_pLink->command(command, nullptr, 0, type, payload, length, 500);
++    }
++
++    if ((ok == true) && (type == LinkResponse::ACK))
++    {
++        sendJson(p_wifi, "{\"ok\":true,\"msg\":\"ack\"}");
++    }
++    else
++    {
++        sendJson(p_wifi, "{\"ok\":false,\"msg\":\"no ack\"}");
++    }
+ 
+     return true;
+ }
+@@ -128,6 +354,30 @@ bool StreamServer::handleClients()
+     {
+         sendStream(&client);
+     }
++    else if (request_line.indexOf("/cmd/ping") >= 0)
++    {
++        handlePing(&client);
++    }
++    else if (request_line.indexOf("/cmd/status") >= 0)
++    {
++        handleStatus(&client);
++    }
++    else if (request_line.indexOf("/cmd/start") >= 0)
++    {
++        handleSimpleCommand(&client, LinkCommand::START_RUN);
++    }
++    else if (request_line.indexOf("/cmd/reboot") >= 0)
++    {
++        handleSimpleCommand(&client, LinkCommand::REBOOT);
++    }
++    else if (request_line.indexOf("/cmd/estop") >= 0)
++    {
++        handleSimpleCommand(&client, LinkCommand::ESTOP);
++    }
++    else if (request_line.indexOf("/cmd/drive") >= 0)
++    {
++        handleDrive(&client, request_line);
++    }
+     else
+     {
+         sendIndexPage(&client);
+@@ -136,4 +386,4 @@ bool StreamServer::handleClients()
+     client.stop();
+ 
+     return true;
+-}
+\ No newline at end of file
++}

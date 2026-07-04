@@ -147,7 +147,7 @@ void Controller::handleCameraInit()
         m_screen.showStatus("Camera", "ready");
     }
 
-    m_stream.initialize(&m_camera, STREAM_PORT);
+    m_stream.initialize(&m_camera, &m_link, STREAM_PORT);
     m_stream.start();
     m_screen.showStatus("Streaming", m_ip);
     m_stateMachine.setState(ControllerState::RUN);

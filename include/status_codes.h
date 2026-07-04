@@ -23,7 +23,7 @@ enum class ComponentId : uint8_t
     IR_PAIR     = 9,
     CLIFF       = 10,
     UART_LINK   = 11,
-    DISPLAY     = 12,
+    SCREEN      = 12,
     CAMERA      = 13,
     FLASH_MEM   = 14
 };
