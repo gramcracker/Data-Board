@@ -103,3 +103,8 @@ bool Screen::showStatus(const char *p_title, const char *p_line)
 
     return true;
 }
+
+Arduino_GFX *Screen::gfx()
+{
+    return m_pGfx;
+}

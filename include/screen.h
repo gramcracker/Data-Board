@@ -14,6 +14,7 @@ public:
     bool showBootBanner();
     bool runSelfTest();
     bool showStatus(const char *p_title, const char *p_line);
+    Arduino_GFX *gfx();
 
 private:
     Arduino_DataBus *m_pBus = nullptr;

@@ -3,6 +3,7 @@
 #include "controller_globals.h"
 #include "controller_state_machine.h"
 #include "screen.h"
+#include "eyes.h"
 #include "camera.h"
 #include "wifi_manager.h"
 #include "stream_server.h"
@@ -27,6 +28,7 @@ private:
     ControllerStateMachine m_stateMachine;
 
     Screen       m_screen;
+    Eyes         m_eyes;
     Camera       m_camera;
     WifiManager  m_wifi;
     StreamServer m_stream;

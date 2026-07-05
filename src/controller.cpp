@@ -17,6 +17,7 @@ bool Controller::initialize()
     }
 
     m_screen.showBootBanner();
+    m_eyes.initialize(m_screen.gfx());
     m_stateMachine.initialize(ControllerState::BOOT);
 
     return true;
@@ -158,22 +159,15 @@ void Controller::handleRun()
     m_stream.handleClients();
     m_link.poll();
 
-    if ((millis() - m_lastRefresh) < DISPLAY_REFRESH_MS)
+    // The GC9A01 shares its GDMA channel with the camera. Drawing the face while
+    // the camera streams corrupts the camera descriptors, so the eyes render only
+    // when no stream client is connected, which is when the camera DMA is idle.
+    if (m_stream.isStreaming() == true)
     {
         return;
     }
 
-    m_lastRefresh = millis();
-
-    // The GC9A01 runs on SPI with a GDMA channel, the same DMA block the camera
-    // uses. Redrawing it while the camera DMA is free-running can corrupt the
-    // camera descriptors, so during streaming we only log stats and leave the
-    // panel alone.
-    uint32_t cam_frames = 0;
-    size_t   cam_last_len = 0;
-
-    m_camera.getCaptureStats(cam_frames, cam_last_len);
-    gLogger.info("Camera frames:%u last_len:%u", cam_frames, (unsigned)cam_last_len);
+    m_eyes.update();
 }
 
 void Controller::handleFault()
