@@ -2,6 +2,7 @@
 #include "camera.h"
 #include "camera_globals.h"
 #include "link.h"
+#include "eyes.h"
 #include "status_codes.h"
 #include "logger.h"
 #include <Arduino.h>
@@ -56,7 +57,19 @@ img{max-width:100%;height:auto;background:#000}
 mm/count <input id="p_mmpc" size="8"> track mm <input id="p_track" size="6"><br>
 Kp <input id="p_kp" size="5"> Ki <input id="p_ki" size="5"> Kd <input id="p_kd" size="5">
 </div>
-<img id="cam" src="">
+<div class="row">
+<button onclick="expr(0)">Neutral</button>
+<button onclick="expr(1)">Happy</button>
+<button onclick="expr(2)">Tired</button>
+<button onclick="expr(3)">Angry</button>
+</div>
+<div class="row">
+look at: <canvas id="pad" width="120" height="120" style="background:#222;border-radius:8px;touch-action:none;vertical-align:middle"></canvas>
+</div>
+<div style="display:flex;justify-content:center;gap:8px;align-items:center;flex-wrap:wrap">
+<img id="cam" src="" style="max-width:240px">
+<canvas id="face" width="160" height="160" style="background:#000;border-radius:12px"></canvas>
+</div>
 <div id="tel">telemetry: (waiting)</div>
 <div id="log"></div>
 <script>
@@ -97,6 +110,16 @@ function applyParams(){var q='/cmd/setparams?mmpc='+document.getElementById('p_m
 var streaming=false;
 function toggleStream(){var c=document.getElementById('cam');if(streaming==false){c.src='/stream';streaming=true;log('camera on (face paused)');}else{c.src='';streaming=false;log('camera off (face resumes)');}}
 setInterval(poll,500);
+function expr(m){fetch('/cmd/expression?mood='+m).then(function(r){return r.text();}).then(function(t){log('mood '+m);});}
+var pad=document.getElementById('pad');
+var lastLook=0;function padTo(ev){var t=Date.now();if(t-lastLook<120){return;}lastLook=t;var r=pad.getBoundingClientRect();var cx=(ev.clientX-r.left)/r.width;var cy=(ev.clientY-r.top)/r.height;var x=Math.round((0.5-cx)*200);var y=Math.round((cy-0.5)*200);fetch('/cmd/lookat?x='+x+'&y='+y).catch(function(e){});}
+pad.addEventListener('pointerdown',padTo);
+pad.addEventListener('pointermove',function(ev){if(ev.buttons>0){padTo(ev);}});
+function rr(ctx,x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();ctx.fill();}
+function tri(ctx,a,b,c,d,e,f){ctx.beginPath();ctx.moveTo(a,b);ctx.lineTo(c,d);ctx.lineTo(e,f);ctx.closePath();ctx.fill();}
+function drawFace(d){var cv=document.getElementById('face');var ctx=cv.getContext('2d');var W=cv.width,H=cv.height;ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);ctx.translate(W,0);ctx.scale(-1,1);ctx.scale(W/240,H/240);var gx=d.gx*30/100,gy=d.gy*30/100;var open=80*d.open/100;var ys=0;if(d.mood==1){open=open*0.6;ys=12;}if(open<6){open=6;}var rad=Math.min(20,open/2);var lx=120-20-60+gx,rx=120+20+gx,ty=120-open/2+gy+ys;ctx.fillStyle='#0ff';rr(ctx,lx,ty,60,open,rad);rr(ctx,rx,ty,60,open,rad);ctx.fillStyle='#000';if(d.mood==2){ctx.fillRect(lx,ty,60,open*0.4);ctx.fillRect(rx,ty,60,open*0.4);}if(d.mood==3){tri(ctx,lx+60,ty,lx+60,ty+open*0.5,lx,ty);tri(ctx,rx,ty,rx,ty+open*0.5,rx+60,ty);}ctx.setTransform(1,0,0,1,0,0);}
+function pollFace(){fetch('/cmd/face').then(function(r){return r.json();}).then(function(d){drawFace(d);}).catch(function(e){});}
+setInterval(pollFace,120);
 </script>
 </body>
 </html>)HTML";
@@ -201,7 +224,7 @@ static float getFloatLE(const uint8_t *p_buf, int idx)
     return value;
 }
 
-bool StreamServer::initialize(Camera *p_camera, Link *p_link, uint16_t port)
+bool StreamServer::initialize(Camera *p_camera, Link *p_link, Eyes *p_eyes, uint16_t port)
 {
     if (p_camera == nullptr)
     {
@@ -210,6 +233,7 @@ bool StreamServer::initialize(Camera *p_camera, Link *p_link, uint16_t port)
 
     m_pCamera = p_camera;
     m_pLink   = p_link;
+    m_pEyes   = p_eyes;
     m_port    = port;
 
     return true;
@@ -521,6 +545,76 @@ bool StreamServer::handleSetParams(void *p_client, const String &request_line)
     return true;
 }
 
+bool StreamServer::handleExpression(void *p_client, const String &request_line)
+{
+    WiFiClient *p_wifi = (WiFiClient *)p_client;
+    int         mood   = int(queryInt(request_line, "mood=", 0));
+
+    if (mood < 0)
+    {
+        mood = 0;
+    }
+
+    if (mood > 3)
+    {
+        mood = 3;
+    }
+
+    if (m_pEyes != nullptr)
+    {
+        m_pEyes->setMood(EyeMood(mood));
+    }
+
+    sendJson(p_wifi, "{\"ok\":true}");
+
+    return true;
+}
+
+bool StreamServer::handleLookAt(void *p_client, const String &request_line)
+{
+    WiFiClient *p_wifi = (WiFiClient *)p_client;
+    int16_t     x      = int16_t(queryInt(request_line, "x=", 0));
+    int16_t     y      = int16_t(queryInt(request_line, "y=", 0));
+
+    if (m_pEyes != nullptr)
+    {
+        m_pEyes->lookAt(x, y);
+    }
+
+    sendJson(p_wifi, "{\"ok\":true}");
+
+    return true;
+}
+
+bool StreamServer::handleFace(void *p_client)
+{
+    WiFiClient *p_wifi    = (WiFiClient *)p_client;
+    uint8_t     mood      = 0;
+    int16_t     gaze_x    = 0;
+    int16_t     gaze_y    = 0;
+    int16_t     open_pct  = 0;
+
+    if (m_pEyes != nullptr)
+    {
+        m_pEyes->getState(mood, gaze_x, gaze_y, open_pct);
+    }
+
+    p_wifi->print("HTTP/1.1 200 OK\r\n");
+    p_wifi->print("Content-Type: application/json\r\n");
+    p_wifi->print("Connection: close\r\n\r\n");
+    p_wifi->print("{\"mood\":");
+    p_wifi->print(mood);
+    p_wifi->print(",\"gx\":");
+    p_wifi->print(gaze_x);
+    p_wifi->print(",\"gy\":");
+    p_wifi->print(gaze_y);
+    p_wifi->print(",\"open\":");
+    p_wifi->print(open_pct);
+    p_wifi->print("}");
+
+    return true;
+}
+
 bool StreamServer::handleDrive(void *p_client, const String &request_line)
 {
     WiFiClient *p_wifi = (WiFiClient *)p_client;
@@ -580,7 +674,7 @@ bool StreamServer::handleClients()
 
         while ((client.available() == 0) && (client.connected() == true))
         {
-            if ((millis() - start) > 1000)
+            if ((millis() - start) > 50)
             {
                 break;
             }
@@ -632,6 +726,18 @@ bool StreamServer::handleClients()
         else if (request_line.indexOf("/cmd/estop") >= 0)
         {
             handleSimpleCommand(&client, LinkCommand::ESTOP);
+        }
+        else if (request_line.indexOf("/cmd/expression") >= 0)
+        {
+            handleExpression(&client, request_line);
+        }
+        else if (request_line.indexOf("/cmd/lookat") >= 0)
+        {
+            handleLookAt(&client, request_line);
+        }
+        else if (request_line.indexOf("/cmd/face") >= 0)
+        {
+            handleFace(&client);
         }
         else if (request_line.indexOf("/cmd/getparams") >= 0)
         {

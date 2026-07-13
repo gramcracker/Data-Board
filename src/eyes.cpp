@@ -15,36 +15,48 @@ bool Eyes::initialize(Arduino_GFX *p_gfx)
     return true;
 }
 
-void Eyes::setGaze(int16_t target_x, int16_t target_y)
+void Eyes::setMood(EyeMood mood)
 {
-    m_gazeTargetX = target_x;
-    m_gazeTargetY = target_y;
+    m_mood = mood;
 }
 
-void Eyes::update()
+void Eyes::lookAt(int16_t norm_x, int16_t norm_y)
 {
-    if (m_ready == false)
+    if (norm_x > 100)
     {
-        return;
+        norm_x = 100;
     }
 
-    uint32_t now = millis();
-
-    if ((now - m_lastDraw) < EYE_REDRAW_MS)
+    if (norm_x < -100)
     {
-        return;
+        norm_x = -100;
     }
 
-    m_lastDraw = now;
-
-    if (m_cleared == false)
+    if (norm_y > 100)
     {
-        m_pGfx->fillScreen(EYE_BG);
-        m_cleared = true;
+        norm_y = 100;
     }
 
-    int16_t open_px = EYE_HEIGHT;
+    if (norm_y < -100)
+    {
+        norm_y = -100;
+    }
 
+    m_gazeTargetX   = norm_x;
+    m_gazeTargetY   = norm_y;
+    m_directedUntil = millis() + EYE_LOOK_HOLD_MS;
+}
+
+void Eyes::getState(uint8_t &out_mood, int16_t &out_gaze_x, int16_t &out_gaze_y, int16_t &out_open_pct)
+{
+    out_mood     = uint8_t(m_mood);
+    out_gaze_x   = m_gazeX;
+    out_gaze_y   = m_gazeY;
+    out_open_pct = m_openPct;
+}
+
+void Eyes::advanceState(uint32_t now)
+{
     if (m_blinking == false)
     {
         if ((now - m_lastBlink) >= EYE_BLINK_INTERVAL_MS)
@@ -54,6 +66,8 @@ void Eyes::update()
         }
     }
 
+    m_openPct = 100;
+
     if (m_blinking == true)
     {
         uint32_t elapsed = now - m_blinkStart;
@@ -62,6 +76,7 @@ void Eyes::update()
         {
             m_blinking  = false;
             m_lastBlink = now;
+            m_openPct   = 100;
         }
         else
         {
@@ -77,36 +92,93 @@ void Eyes::update()
                 frac = (float(elapsed) - half) / half;
             }
 
-            open_px = int16_t(float(EYE_HEIGHT) * frac);
-
-            if (open_px < EYE_MIN_OPEN_PX)
-            {
-                open_px = EYE_MIN_OPEN_PX;
-            }
+            m_openPct = int16_t(frac * 100.0f);
         }
     }
 
-    if ((now - m_lastDrift) >= EYE_DRIFT_INTERVAL_MS)
+    if (now > m_directedUntil)
     {
-        m_lastDrift   = now;
-        m_gazeTargetX = int16_t(random(-EYE_DRIFT_PX, EYE_DRIFT_PX + 1));
-        m_gazeTargetY = int16_t(random(-EYE_DRIFT_PX, EYE_DRIFT_PX + 1));
+        if ((now - m_lastDrift) >= EYE_DRIFT_INTERVAL_MS)
+        {
+            m_lastDrift   = now;
+            m_gazeTargetX = int16_t(random(-EYE_DRIFT_NORM, EYE_DRIFT_NORM + 1));
+            m_gazeTargetY = int16_t(random(-EYE_DRIFT_NORM, EYE_DRIFT_NORM + 1));
+        }
     }
 
-    m_gazeX += int16_t((m_gazeTargetX - m_gazeX) / 4);
-    m_gazeY += int16_t((m_gazeTargetY - m_gazeY) / 4);
-
-    draw(m_gazeX, m_gazeY, open_px);
+    if ((now - m_lastEase) >= EYE_EASE_MS)
+    {
+        m_lastEase = now;
+        m_gazeX += int16_t((m_gazeTargetX - m_gazeX) / 4);
+        m_gazeY += int16_t((m_gazeTargetY - m_gazeY) / 4);
+    }
 }
 
-void Eyes::draw(int16_t offset_x, int16_t offset_y, int16_t open_px)
+void Eyes::update(bool allow_draw)
 {
-    int16_t band_x = 24;
-    int16_t band_y = EYE_CENTER_Y - (EYE_HEIGHT / 2) - EYE_DRIFT_PX - 4;
-    int16_t band_w = 240 - 48;
-    int16_t band_h = EYE_HEIGHT + (2 * EYE_DRIFT_PX) + 8;
+    if (m_ready == false)
+    {
+        return;
+    }
 
-    m_pGfx->fillRect(band_x, band_y, band_w, band_h, EYE_BG);
+    uint32_t now = millis();
+
+    advanceState(now);
+
+    if (allow_draw == false)
+    {
+        return;
+    }
+
+    if ((now - m_lastDraw) < EYE_REDRAW_MS)
+    {
+        return;
+    }
+
+    m_lastDraw = now;
+
+    if (m_cleared == false)
+    {
+        m_pGfx->fillScreen(EYE_BG);
+        m_cleared = true;
+    }
+
+    draw();
+}
+
+void Eyes::draw()
+{
+    int16_t gaze_x  = int16_t((int(m_gazeX) * EYE_GAZE_RANGE_PX) / 100);
+    int16_t gaze_y  = int16_t((int(m_gazeY) * EYE_GAZE_RANGE_PX) / 100);
+    int16_t open_px = int16_t((int(EYE_HEIGHT) * int(m_openPct)) / 100);
+    int16_t y_shift = 0;
+
+    if (m_mood == EyeMood::HAPPY)
+    {
+        open_px = int16_t((open_px * 6) / 10);
+        y_shift = 12;
+    }
+
+    if (open_px < EYE_MIN_OPEN_PX)
+    {
+        open_px = EYE_MIN_OPEN_PX;
+    }
+
+    int16_t left_x  = (120 - (EYE_GAP / 2) - EYE_WIDTH) + gaze_x;
+    int16_t right_x = (120 + (EYE_GAP / 2)) + gaze_x;
+    int16_t top_y   = (EYE_CENTER_Y - (open_px / 2)) + gaze_y + y_shift;
+    uint8_t mood    = uint8_t(m_mood);
+
+    if (m_hasPrev == true)
+    {
+        if ((left_x == m_prevLeftX) && (top_y == m_prevTopY) && (open_px == m_prevOpen) && (mood == m_prevMood))
+        {
+            return;
+        }
+
+        m_pGfx->fillRect(m_prevLeftX,  m_prevTopY, EYE_WIDTH, m_prevOpen, EYE_BG);
+        m_pGfx->fillRect(m_prevRightX, m_prevTopY, EYE_WIDTH, m_prevOpen, EYE_BG);
+    }
 
     int16_t radius = EYE_RADIUS;
 
@@ -115,10 +187,27 @@ void Eyes::draw(int16_t offset_x, int16_t offset_y, int16_t open_px)
         radius = open_px / 2;
     }
 
-    int16_t left_x  = (120 - (EYE_GAP / 2) - EYE_WIDTH) + offset_x;
-    int16_t right_x = (120 + (EYE_GAP / 2)) + offset_x;
-    int16_t top_y   = (EYE_CENTER_Y - (open_px / 2)) + offset_y;
-
     m_pGfx->fillRoundRect(left_x,  top_y, EYE_WIDTH, open_px, radius, EYE_COLOR);
     m_pGfx->fillRoundRect(right_x, top_y, EYE_WIDTH, open_px, radius, EYE_COLOR);
+
+    if (m_mood == EyeMood::TIRED)
+    {
+        int16_t cover_h = int16_t((open_px * 4) / 10);
+        m_pGfx->fillRect(left_x,  top_y, EYE_WIDTH, cover_h, EYE_BG);
+        m_pGfx->fillRect(right_x, top_y, EYE_WIDTH, cover_h, EYE_BG);
+    }
+
+    if (m_mood == EyeMood::ANGRY)
+    {
+        int16_t brow = int16_t((open_px * 5) / 10);
+        m_pGfx->fillTriangle(left_x + EYE_WIDTH, top_y, left_x + EYE_WIDTH, top_y + brow, left_x, top_y, EYE_BG);
+        m_pGfx->fillTriangle(right_x, top_y, right_x, top_y + brow, right_x + EYE_WIDTH, top_y, EYE_BG);
+    }
+
+    m_prevLeftX  = left_x;
+    m_prevRightX = right_x;
+    m_prevTopY   = top_y;
+    m_prevOpen   = open_px;
+    m_prevMood   = mood;
+    m_hasPrev    = true;
 }

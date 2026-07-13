@@ -7,7 +7,7 @@
 #define EYE_RADIUS              20
 #define EYE_GAP                 40
 #define EYE_CENTER_Y            120
-#define EYE_DRIFT_PX            12
+#define EYE_GAZE_RANGE_PX       30
 #define EYE_MIN_OPEN_PX         6
 
 #define EYE_COLOR               0x07FF
@@ -17,3 +17,6 @@
 #define EYE_BLINK_INTERVAL_MS   3500
 #define EYE_BLINK_DURATION_MS   180
 #define EYE_DRIFT_INTERVAL_MS   2500
+#define EYE_DRIFT_NORM          40
+#define EYE_LOOK_HOLD_MS        4000
+#define EYE_EASE_MS             30

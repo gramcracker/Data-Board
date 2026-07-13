@@ -148,7 +148,7 @@ void Controller::handleCameraInit()
         m_screen.showStatus("Camera", "ready");
     }
 
-    m_stream.initialize(&m_camera, &m_link, STREAM_PORT);
+    m_stream.initialize(&m_camera, &m_link, &m_eyes, STREAM_PORT);
     m_stream.start();
     m_screen.showStatus("Streaming", m_ip);
     m_stateMachine.setState(ControllerState::RUN);
@@ -159,15 +159,10 @@ void Controller::handleRun()
     m_stream.handleClients();
     m_link.poll();
 
-    // The GC9A01 shares its GDMA channel with the camera. Drawing the face while
-    // the camera streams corrupts the camera descriptors, so the eyes render only
-    // when no stream client is connected, which is when the camera DMA is idle.
-    if (m_stream.isStreaming() == true)
-    {
-        return;
-    }
-
-    m_eyes.update();
+    // The GC9A01 shares its GDMA channel with the camera, so the eyes advance
+    // their state every loop but only draw to the display when the camera is not
+    // streaming (when the camera DMA is idle).
+    m_eyes.update(m_stream.isStreaming() == false);
 }
 
 void Controller::handleFault()
