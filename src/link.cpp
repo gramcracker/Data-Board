@@ -1,4 +1,5 @@
 #include "link.h"
+#include "driver/gpio.h"
 #include "logger.h"
 #include <Arduino.h>
 
@@ -20,6 +21,7 @@ bool Link::initialize(unsigned long baud, int tx_pin, int rx_pin)
 {
     Serial1.setRxBufferSize(1024);
     Serial1.begin(baud, SERIAL_8N1, rx_pin, tx_pin);
+    gpio_pullup_en((gpio_num_t)rx_pin);
 
     return true;
 }

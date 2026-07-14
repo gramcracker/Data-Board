@@ -40,7 +40,7 @@ img{max-width:100%;height:auto;background:#000}
 <button onclick="cmd('/cmd/start')">Start Run</button>
 <button onclick="cmd('/cmd/reboot')">Reboot STM</button>
 <button class="estop" onclick="cmd('/cmd/estop')">E-STOP</button>
-<button onclick="toggleStream()">View Camera</button>
+<button onclick="window.toggleStream()">View Camera</button>
 </div>
 <div class="row pad">
 <button onpointerdown="drive(200,0)" onpointerup="stop()" onpointerleave="stop()">Fwd</button><br>
@@ -77,7 +77,7 @@ function log(t){var l=document.getElementById('log');l.textContent=(new Date().t
 function cmd(p){fetch(p).then(function(r){return r.text();}).then(function(t){log(p+"  ->  "+t);}).catch(function(e){log(p+"  ERR "+e);});}
 function drive(v,w){fetch('/cmd/drive?v='+v+'&w='+w).then(function(r){return r.text();}).then(function(t){log('drive '+v+','+w+"  ->  "+t);});}
 function stop(){drive(0,0);}
-function poll(){fetch('/cmd/telemetry').then(function(r){return r.json();}).then(function(d){
+var telBusy=false;function poll(){if(telBusy){return;}telBusy=true;fetch('/cmd/telemetry').then(function(r){return r.json();}).then(function(d){telBusy=false;
 if(d.ok!=true){return;}
 var states=['Booting','Self-test','Debug','Running','Fault'];
 var st=states[d.state];if(st==undefined){st='state '+d.state;}
@@ -104,21 +104,32 @@ L.push('Wall sensor 3: '+d.w2+' adc');
 L.push('Wall sensor 4: '+d.w3+' adc');
 L.push('Cliff sensor: '+d.cliff+' adc');
 document.getElementById('tel').textContent=L.join('\n');
-}).catch(function(e){});}
+}).catch(function(e){telBusy=false;});}
 function loadParams(){fetch('/cmd/getparams').then(function(r){return r.json();}).then(function(d){if(d.ok!=true){log('getparams failed');return;}document.getElementById('p_mmpc').value=d.mmpc;document.getElementById('p_track').value=d.track;document.getElementById('p_kp').value=d.kp;document.getElementById('p_ki').value=d.ki;document.getElementById('p_kd').value=d.kd;log('params loaded');});}
 function applyParams(){var q='/cmd/setparams?mmpc='+document.getElementById('p_mmpc').value+'&track='+document.getElementById('p_track').value+'&kp='+document.getElementById('p_kp').value+'&ki='+document.getElementById('p_ki').value+'&kd='+document.getElementById('p_kd').value;fetch(q).then(function(r){return r.text();}).then(function(t){log('setparams -> '+t);});}
 var streaming=false;
-function toggleStream(){var c=document.getElementById('cam');if(streaming==false){c.src='/stream';streaming=true;log('camera on (face paused)');}else{c.src='';streaming=false;log('camera off (face resumes)');}}
+window.toggleStream = function () {
+    var c = document.getElementById('cam');
+    if (streaming == false) {
+        c.src = '/stream';
+        streaming = true;
+        log('camera on (face paused)');
+    } else {
+        c.src = '';
+        streaming = false;
+        log('camera off (face resumes)');
+    }
+};
 setInterval(poll,500);
 function expr(m){fetch('/cmd/expression?mood='+m).then(function(r){return r.text();}).then(function(t){log('mood '+m);});}
 var pad=document.getElementById('pad');
-var lastLook=0;function padTo(ev){var t=Date.now();if(t-lastLook<120){return;}lastLook=t;var r=pad.getBoundingClientRect();var cx=(ev.clientX-r.left)/r.width;var cy=(ev.clientY-r.top)/r.height;var x=Math.round((0.5-cx)*200);var y=Math.round((cy-0.5)*200);fetch('/cmd/lookat?x='+x+'&y='+y).catch(function(e){});}
+var lastLook=0;var lookBusy=false;function padTo(ev){if(lookBusy){return;}var t=Date.now();if(t-lastLook<120){return;}lastLook=t;var r=pad.getBoundingClientRect();var cx=(ev.clientX-r.left)/r.width;var cy=(ev.clientY-r.top)/r.height;var x=Math.round((0.5-cx)*200);var y=Math.round((cy-0.5)*200);lookBusy=true;fetch('/cmd/lookat?x='+x+'&y='+y).then(function(r){lookBusy=false;}).catch(function(e){lookBusy=false;});}
 pad.addEventListener('pointerdown',padTo);
 pad.addEventListener('pointermove',function(ev){if(ev.buttons>0){padTo(ev);}});
 function rr(ctx,x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();ctx.fill();}
 function tri(ctx,a,b,c,d,e,f){ctx.beginPath();ctx.moveTo(a,b);ctx.lineTo(c,d);ctx.lineTo(e,f);ctx.closePath();ctx.fill();}
 function drawFace(d){var cv=document.getElementById('face');var ctx=cv.getContext('2d');var W=cv.width,H=cv.height;ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);ctx.translate(W,0);ctx.scale(-1,1);ctx.scale(W/240,H/240);var gx=d.gx*30/100,gy=d.gy*30/100;var open=80*d.open/100;var ys=0;if(d.mood==1){open=open*0.6;ys=12;}if(open<6){open=6;}var rad=Math.min(20,open/2);var lx=120-20-60+gx,rx=120+20+gx,ty=120-open/2+gy+ys;ctx.fillStyle='#0ff';rr(ctx,lx,ty,60,open,rad);rr(ctx,rx,ty,60,open,rad);ctx.fillStyle='#000';if(d.mood==2){ctx.fillRect(lx,ty,60,open*0.4);ctx.fillRect(rx,ty,60,open*0.4);}if(d.mood==3){tri(ctx,lx+60,ty,lx+60,ty+open*0.5,lx,ty);tri(ctx,rx,ty,rx,ty+open*0.5,rx+60,ty);}ctx.setTransform(1,0,0,1,0,0);}
-function pollFace(){fetch('/cmd/face').then(function(r){return r.json();}).then(function(d){drawFace(d);}).catch(function(e){});}
+var faceBusy=false;function pollFace(){if(faceBusy){return;}faceBusy=true;fetch('/cmd/face').then(function(r){return r.json();}).then(function(d){faceBusy=false;drawFace(d);}).catch(function(e){faceBusy=false;});}
 setInterval(pollFace,120);
 </script>
 </body>
@@ -674,7 +685,7 @@ bool StreamServer::handleClients()
 
         while ((client.available() == 0) && (client.connected() == true))
         {
-            if ((millis() - start) > 50)
+            if ((millis() - start) > 250)
             {
                 break;
             }
@@ -682,6 +693,13 @@ bool StreamServer::handleClients()
             delay(1);
         }
 
+        if (client.available() == 0)
+        {
+            client.stop();
+            return false;
+        }
+
+        client.setTimeout(1);
         String request_line = client.readStringUntil('\n');
 
         while (client.available() > 0)

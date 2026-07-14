@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiProv.h>
+#include <esp_wifi.h>
 
 static volatile bool gWifiConnected = false;
 static volatile bool gProvisioningActive = false;
@@ -13,6 +14,8 @@ static void wifiProvEvent(arduino_event_t *p_event)
     if (p_event->event_id == ARDUINO_EVENT_WIFI_STA_GOT_IP)
     {
         gWifiConnected = true;
+        WiFi.setSleep(false);
+        WiFi.setTxPower(WIFI_POWER_19_5dBm);
         gLogger.success("WiFi connect");
         return;
     }
@@ -71,7 +74,30 @@ bool WifiManager::beginConnectOrProvision(const char *p_service_name, const char
         force_reset = true;
     }
 
-    gLogger.attempt("WiFi connect or provision");
+    WiFi.mode(WIFI_STA);
+
+    wifi_config_t sta_config = {};
+    bool          has_creds  = false;
+
+    if (esp_wifi_get_config(WIFI_IF_STA, &sta_config) == ESP_OK)
+    {
+        if (sta_config.sta.ssid[0] != 0)
+        {
+            has_creds = true;
+        }
+    }
+
+    // Only run BLE provisioning when there is nothing stored (or a reset is
+    // forced). BLE and WiFi share the 2.4 GHz radio on the S3, so leaving the
+    // provisioning stack up cripples WiFi until it tears down.
+    if ((has_creds == true) && (force_reset == false))
+    {
+        gLogger.attempt("WiFi connect, stored creds");
+        WiFi.begin();
+        return true;
+    }
+
+    gLogger.attempt("WiFi provision BLE, no stored creds");
     WiFiProv.beginProvision(NETWORK_PROV_SCHEME_BLE,
                             NETWORK_PROV_SCHEME_HANDLER_FREE_BTDM,
                             NETWORK_PROV_SECURITY_1,
