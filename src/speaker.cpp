@@ -1,15 +1,20 @@
-#include "Speaker.h"
-#include "audio_globals.h"
+#include "speaker.h"
+#include "sound_globals.h"
+#include "pins.h"
 #include "logger.h"
+#include "driver/gpio.h"
+
+
+#define AMP_SD_MODE_ENABLE          1
+#define AMP_SD_MODE_SHUTDOWN        0
 
 bool Speaker::initialize()
 {
-    gLogger.info("Speaker init ...");
+    gLogger.attempt("Speaker init");
 
-    // Drive SD_MODE low before the I2S clocks exist. Most breakouts pull
-    // SD_MODE up to VIN, so a floating pin at reset enables the amp and
-    // produces a startup pop. The datasheet also requires SD_MODE at 0 V
-    // whenever BCLK and WS are stopped, which is the state right now.
+    // Drive SD_MODE low before the I2S clocks exist. Most breakouts pull it up
+    // to VIN, so a floating pin at reset enables the amp and pops. The MAX98357A
+    // also requires SD_MODE at 0 V whenever BCLK and WS are stopped.
     gpio_config_t sd_conf = {};
     sd_conf.pin_bit_mask = (1ULL << PIN_AMP_SD_MODE);
     sd_conf.mode = GPIO_MODE_OUTPUT;
@@ -39,7 +44,7 @@ bool Speaker::initialize()
     }
 
     i2s_std_config_t std_conf = {};
-    std_conf.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(AUDIO_SAMPLE_RATE);
+    std_conf.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(SYNTH_SAMPLE_RATE);
     std_conf.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO);
     std_conf.gpio_cfg.mclk = I2S_GPIO_UNUSED;
     std_conf.gpio_cfg.bclk = (gpio_num_t)PIN_I2S_BCLK;
@@ -67,7 +72,7 @@ bool Speaker::initialize()
     }
 
     m_ready = true;
-    gLogger.info("Speaker init ok");
+    gLogger.success("Speaker init");
     return true;
 }
 
@@ -78,24 +83,19 @@ bool Speaker::enable()
         return false;
     }
 
-    // Clocks are already running from i2s_channel_enable, so it is safe to
-    // raise SD_MODE now. Doing it in this order avoids the click the datasheet
-    // warns about when SD_MODE leads the clocks.
+    // Clocks are already running from i2s_channel_enable, so raising SD_MODE now
+    // avoids the click that happens when SD_MODE leads the clocks.
     gpio_set_level((gpio_num_t)PIN_AMP_SD_MODE, AMP_SD_MODE_ENABLE);
-    gLogger.info("Speaker amp enabled");
     return true;
 }
 
-bool Speaker::shutdown()
+bool Speaker::mute()
 {
-    // SD_MODE must return to 0 V before the clocks stop. This test never stops
-    // the clocks, but the mute path uses this same call.
     gpio_set_level((gpio_num_t)PIN_AMP_SD_MODE, AMP_SD_MODE_SHUTDOWN);
-    gLogger.info("Speaker amp shutdown");
     return true;
 }
 
-bool Speaker::writeSamples(const int16_t *p_samples, size_t sample_count)
+bool Speaker::play(const int16_t *p_samples, size_t sample_count)
 {
     if (m_ready == false)
     {
@@ -104,14 +104,13 @@ bool Speaker::writeSamples(const int16_t *p_samples, size_t sample_count)
 
     if (p_samples == nullptr)
     {
-        gLogger.error("Speaker writeSamples null buffer FAILED");
+        gLogger.error("Speaker play null buffer FAILED");
         return false;
     }
 
-    // Each frame is one stereo pair of 32-bit slots. The int16 sample sits in
-    // the top 16 bits of the left slot; the right slot is silent because the
-    // amp only reads the left channel. Index into the buffer explicitly rather
-    // than walking pointers.
+    // Each int16 sample goes into the top 16 bits of the left 32-bit slot; the
+    // amp reads the left channel only, so the right slot is silent. Convert in
+    // chunks through a small stack buffer, indexing explicitly.
     static int32_t s_slotBuf[256];
     size_t written_total = 0;
 

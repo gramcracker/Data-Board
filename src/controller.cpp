@@ -4,6 +4,7 @@
 #include "globals.h"
 #include "logger.h"
 #include <Arduino.h>
+#include <esp_heap_caps.h>
 
 Controller gController;
 
@@ -18,9 +19,72 @@ bool Controller::initialize()
 
     m_screen.showBootBanner();
     m_eyes.initialize(m_screen.gfx());
+
+    m_audioOk = m_soundSynth.initialize();
+
+    if (m_audioOk == true)
+    {
+        m_audioOk = m_speaker.initialize();
+    }
+
+    if (m_audioOk == true)
+    {
+        // Output buffer lives in PSRAM alongside the synth scratch. An utterance
+        // is rendered whole, then handed to I2S, so PSRAM latency does not
+        // matter here and internal SRAM stays free for WiFi and the camera.
+        m_pSoundBuf = (int16_t *)heap_caps_malloc(SYNTH_MAX_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+
+        if (m_pSoundBuf == nullptr)
+        {
+            gLogger.failure("Controller sound buffer alloc");
+            m_audioOk = false;
+        }
+    }
+
+    if (m_audioOk == true)
+    {
+        m_speaker.enable();
+    }
+
+    if (m_audioOk == false)
+    {
+        gLogger.error("Audio init failed, continuing without sound");
+    }
+
     m_stateMachine.initialize(ControllerState::BOOT);
 
     return true;
+}
+
+bool Controller::playEmote(Emote emote)
+{
+    if (m_audioOk == false)
+    {
+        return false;
+    }
+
+    size_t len = 0;
+
+    // The seed advances every call so repeated playback is never identical. It
+    // is reported alongside the emote so a host-side episodic log can
+    // reconstruct exactly what the robot sounded like.
+    m_soundSeed = m_soundSeed * 1664525u + 1013904223u;
+
+    bool ok = m_soundSynth.render(emote, m_soundSeed, m_pSoundBuf, SYNTH_MAX_SAMPLES, len);
+
+    if (ok == false)
+    {
+        gLogger.error("Controller emote render FAILED id:%u", (unsigned)emote);
+        return false;
+    }
+
+    gLogger.info("Emote id:%u seed:%u samples:%u", (unsigned)emote, (unsigned)m_soundSeed, (unsigned)len);
+
+    // i2s_channel_write blocks until the DMA ring drains, so this stalls the
+    // loop for the length of the utterance. That is acceptable at boot but not
+    // during RUN; see the note in the Audio Notion doc about moving playback to
+    // its own task before Layer B is triggered from the host.
+    return m_speaker.play(m_pSoundBuf, len);
 }
 
 bool Controller::execute()
@@ -148,9 +212,13 @@ void Controller::handleCameraInit()
         m_screen.showStatus("Camera", "ready");
     }
 
-    m_stream.initialize(&m_camera, &m_link, &m_eyes, STREAM_PORT);
+    m_stream.initialize(&m_camera, &m_link, STREAM_PORT);
     m_stream.start();
     m_screen.showStatus("Streaming", m_ip);
+
+    // Bring-up check: one emote at boot proves synth, I2S, and amp end to end.
+    playEmote(Emote::REFUSE);
+
     m_stateMachine.setState(ControllerState::RUN);
 }
 
@@ -159,10 +227,15 @@ void Controller::handleRun()
     m_stream.handleClients();
     m_link.poll();
 
-    // The GC9A01 shares its GDMA channel with the camera, so the eyes advance
-    // their state every loop but only draw to the display when the camera is not
-    // streaming (when the camera DMA is idle).
-    m_eyes.update(m_stream.isStreaming() == false);
+    // The GC9A01 shares its GDMA channel with the camera. Drawing the face while
+    // the camera streams corrupts the camera descriptors, so the eyes render only
+    // when no stream client is connected, which is when the camera DMA is idle.
+    if (m_stream.isStreaming() == true)
+    {
+        return;
+    }
+
+    m_eyes.update();
 }
 
 void Controller::handleFault()

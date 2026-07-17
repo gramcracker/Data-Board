@@ -26,6 +26,10 @@ bool Camera::initialize()
     config.pin_d1        = PIN_CAM_D1;
     config.pin_d2        = PIN_CAM_D2;
     config.pin_d3        = PIN_CAM_D3;
+    // 4-bit mode: D4-D7 are unwired. PIN_CAM_D4..D7 are -1 (see pins.h) so the
+    // driver does not claim the audio pins on GPIO 15/16/40/41. If this fork
+    // rejects -1 data lines and the camera regresses, that is the first thing
+    // to revert.
     config.pin_d4        = PIN_CAM_D4;
     config.pin_d5        = PIN_CAM_D5;
     config.pin_d6        = PIN_CAM_D6;
